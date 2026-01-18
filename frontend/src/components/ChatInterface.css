@@ -23,6 +23,9 @@
 }
 
 .export-pdf-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 8px 16px;
   background: #4a90e2;
   color: white;
@@ -34,12 +37,31 @@
   transition: background-color 0.2s;
 }
 
-.export-pdf-button:hover {
+.export-pdf-button:hover:not(:disabled) {
   background: #357abd;
 }
 
-.export-pdf-button:active {
+.export-pdf-button:active:not(:disabled) {
   background: #2a5f8f;
+}
+
+.export-pdf-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spinner-small {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .messages-container {

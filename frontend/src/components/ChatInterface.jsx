@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { jsPDF } from 'jspdf';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import { api } from '../api';
 import './ChatInterface.css';
 
 export default function ChatInterface({
@@ -12,6 +12,7 @@ export default function ChatInterface({
   isLoading,
 }) {
   const [input, setInput] = useState('');
+  const [isDownloading, setIsDownloading] = useState(false);
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -38,187 +39,45 @@ export default function ChatInterface({
     }
   };
 
-  const handleExportPDF = () => {
-    if (!conversation || conversation.messages.length === 0) {
+  // Funzione per scaricare il report
+  const handleExportPDF = async () => {
+    if (!conversation || !conversation.id || conversation.messages.length === 0) {
       return;
     }
 
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const margin = 20;
-    const maxWidth = pageWidth - 2 * margin;
-    let yPosition = margin;
+    setIsDownloading(true);
+    try {
+      // 1. Chiamata all'API
+      const response = await api.downloadReport(conversation.id);
 
-    // Helper function to strip markdown and get plain text
-    const stripMarkdown = (text) => {
-      return text
-        .replace(/#{1,6}\s+/g, '') // Remove headers
-        .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold
-        .replace(/\*(.*?)\*/g, '$1') // Remove italic
-        .replace(/\[([^\]]+)\]\([^\)]+\)/g, '$1') // Remove links
-        .replace(/`([^`]+)`/g, '$1') // Remove inline code
-        .replace(/```[\s\S]*?```/g, '') // Remove code blocks
-        .trim();
-    };
-
-    // Helper function to add text with word wrapping and page breaks
-    const addText = (text, x, y, options = {}) => {
-      const {
-        maxWidth: textMaxWidth = maxWidth,
-        fontSize = 10,
-        fontStyle = 'normal',
-        color = [0, 0, 0]
-      } = options;
-
-      if (!text || text.trim() === '') {
-        return 0;
+      if (!response.ok) {
+        throw new Error('Errore durante la generazione del report');
       }
 
-      doc.setFontSize(fontSize);
-      doc.setFont('helvetica', fontStyle);
-      doc.setTextColor(...color);
+      // 2. Converti la risposta in un "Blob" (file binario)
+      const blob = await response.blob();
 
-      const lines = doc.splitTextToSize(text, textMaxWidth);
-      const lineHeight = fontSize * 0.4;
-      let currentY = y;
+      // 3. Crea un URL temporaneo per il file
+      const url = window.URL.createObjectURL(blob);
+      
+      // 4. Crea un link invisibile nel DOM
+      const link = document.createElement('a');
+      link.href = url;
+      // Nome del file che verrà scaricato
+      link.setAttribute('download', `Investment_Memo_${conversation.id.slice(0, 8)}.pdf`);
+      
+      // 5. Simula il click e pulisci
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url); // Libera memoria
 
-      // Process all lines, handling page breaks as needed
-      for (let i = 0; i < lines.length; i++) {
-        // Check if we need a new page before adding this line
-        if (currentY + lineHeight > pageHeight - margin) {
-          doc.addPage();
-          currentY = margin;
-        }
-
-        // Add the line
-        doc.text(lines[i], x, currentY);
-        currentY += lineHeight;
-      }
-
-      // Update global yPosition to where we ended
-      yPosition = currentY;
-
-      // Return the total height used (approximation)
-      return lines.length * lineHeight;
-    };
-
-    // Helper function to check and add a new page if needed
-    const checkPageBreak = (requiredHeight) => {
-      if (yPosition + requiredHeight > pageHeight - margin) {
-        doc.addPage();
-        yPosition = margin;
-        return true;
-      }
-      return false;
-    };
-
-    // Title
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(51, 51, 51);
-    const title = conversation.title || 'LLM Council Conversation';
-    doc.text(title, margin, yPosition);
-    yPosition += 10;
-
-    // Date
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(102, 102, 102);
-    const date = new Date(conversation.created_at).toLocaleString();
-    doc.text(`Created: ${date}`, margin, yPosition);
-    yPosition += 15;
-
-    // Add separator line
-    doc.setDrawColor(200, 200, 200);
-    doc.line(margin, yPosition, pageWidth - margin, yPosition);
-    yPosition += 10;
-
-    // Export all messages - iterate through entire conversation
-    conversation.messages.forEach((msg, index) => {
-      // Ensure we have space before starting a new message
-      checkPageBreak(50);
-
-      if (msg.role === 'user') {
-        // User message
-        yPosition += 5;
-        addText(
-          'YOU',
-          margin,
-          yPosition,
-          { fontSize: 10, fontStyle: 'bold', color: [102, 102, 102] }
-        );
-        yPosition += 3;
-
-        const userContent = stripMarkdown(msg.content || '');
-        if (userContent) {
-          addText(
-            userContent,
-            margin,
-            yPosition,
-            { fontSize: 11, color: [0, 0, 0] }
-          );
-        }
-        yPosition += 8;
-      } else if (msg.role === 'assistant') {
-        // Assistant message
-        yPosition += 5;
-        addText(
-          'LLM COUNCIL',
-          margin,
-          yPosition,
-          { fontSize: 10, fontStyle: 'bold', color: [102, 102, 102] }
-        );
-        yPosition += 3;
-
-        // Stage 3 (Final Answer) - most important
-        if (msg.stage3 && msg.stage3.response) {
-          addText(
-            'Final Council Answer',
-            margin,
-            yPosition,
-            { fontSize: 11, fontStyle: 'bold', color: [51, 51, 51] }
-          );
-          yPosition += 3;
-
-          // Chairman info
-          if (msg.stage3.model) {
-            const chairmanInfo = `Chairman: ${msg.stage3.model.split('/').pop()}`;
-            addText(
-              chairmanInfo,
-              margin,
-              yPosition,
-              { fontSize: 9, fontStyle: 'italic', color: [102, 102, 102] }
-            );
-            yPosition += 3;
-          }
-
-          const stage3Content = stripMarkdown(msg.stage3.response || '');
-          if (stage3Content) {
-            addText(
-              stage3Content,
-              margin,
-              yPosition,
-              { fontSize: 11, color: [0, 0, 0] }
-            );
-          }
-          yPosition += 8;
-        }
-      }
-
-      // Add separator between messages (but not after the last one)
-      if (index < conversation.messages.length - 1) {
-        checkPageBreak(15);
-        yPosition += 5;
-        doc.setDrawColor(230, 230, 230);
-        doc.line(margin, yPosition, pageWidth - margin, yPosition);
-        yPosition += 10;
-      }
-    });
-
-    // Save PDF
-    const filename = `${title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}.pdf`;
-    doc.save(filename);
+    } catch (error) {
+      console.error("Download fallito:", error);
+      alert("Impossibile scaricare il report al momento.");
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   if (!conversation) {
@@ -240,9 +99,24 @@ export default function ChatInterface({
           <button
             className="export-pdf-button"
             onClick={handleExportPDF}
-            title="Export conversation as PDF"
+            disabled={isDownloading}
+            title="Scarica Investment Memo in PDF"
           >
-            📄 Export PDF
+            {isDownloading ? (
+              <>
+                <span className="spinner-small"></span>
+                <span>Generando...</span>
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ display: 'inline-block', marginRight: '8px' }}>
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Export PDF</span>
+              </>
+            )}
           </button>
         </div>
       )}

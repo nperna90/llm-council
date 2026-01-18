@@ -112,4 +112,17 @@ export const api = {
       }
     }
   },
+
+  /**
+   * Download a PDF report for a conversation.
+   */
+  async downloadReport(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}/download_report`
+    );
+    if (!response.ok) {
+      throw new Error('Failed to download report');
+    }
+    return response;
+  },
 };
