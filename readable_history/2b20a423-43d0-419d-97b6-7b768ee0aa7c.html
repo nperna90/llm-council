@@ -1,0 +1,28 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body { font-family: sans-serif; background-color: #f0f2f5; padding: 20px; }
+            .chat-container { max-width: 900px; margin: 0 auto; display: flex; flex-direction: column; gap: 15px; }
+            .message { padding: 15px; border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); word-wrap: break-word; }
+            .role-user { align-self: flex-end; background-color: #dcf8c6; margin-left: 20%; }
+            .role-assistant { align-self: flex-start; background-color: #ffffff; margin-right: 20%; border: 1px solid #ddd; }
+            .role-system { align-self: center; background-color: #e1f5fe; font-size: 0.8em; }
+            .meta { font-weight: bold; font-size: 0.7em; color: #555; margin-bottom: 5px; text-transform: uppercase; }
+            pre { background: #eee; padding: 10px; overflow-x: auto; }
+        </style>
+    </head>
+    <body><div class="chat-container">
+    
+            <div class="message role-user">
+                <div class="meta">user</div>
+                <div>you are a financial expert with 30 year of experience in stock market and investment. can you analyze my  portfolio investments and help me building it for better performance</div>
+            </div>
+        
+            <div class="message role-assistant">
+                <div class="meta">assistant</div>
+                <div>google/gemini-3-pro-preview<br><br>Error: Unable to generate final synthesis.</div>
+            </div>
+        </div></body></html>
