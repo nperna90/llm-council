@@ -3,6 +3,7 @@
 from typing import List, Dict, Any, Tuple, Optional
 from .openrouter import query_models_parallel, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from . import memory
 
 
 def format_conversation_history(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -187,7 +188,14 @@ async def stage3_synthesize_final(
         ])
         history_context = f"\n\nCONVERSATION HISTORY:\n{history_text}\n"
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.{history_context}
+    # RECUPERA I RICORDI DALLA MEMORIA EPISODICA
+    # Questo permette al Chairman di considerare le decisioni passate
+    past_decisions = memory.get_relevant_context(limit=3)
+    memory_context = ""
+    if past_decisions:
+        memory_context = f"\n\n{past_decisions}\n"
+
+    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.{history_context}{memory_context}
 
 Original Question: {user_query}
 
@@ -202,6 +210,9 @@ Your task as Chairman is to synthesize all of this information into a single, co
 - The peer rankings and what they reveal about response quality
 - Any patterns of agreement or disagreement
 - The conversation history if provided
+- Past decisions and strategies from previous reports (if available in the memory log above)
+
+When referencing past decisions, be explicit and consistent. For example: "As we decided in our previous analysis on [date], we recommended maintaining the position on NVDA. Given the current market conditions..."
 
 Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
 
