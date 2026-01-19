@@ -1,21 +1,8 @@
-"""JSON-based storage for conversations."""
+"""SQLite-based storage for conversations."""
 
-import json
-import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-from pathlib import Path
-from .config import DATA_DIR
-
-
-def ensure_data_dir():
-    """Ensure the data directory exists."""
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-
-
-def get_conversation_path(conversation_id: str) -> str:
-    """Get the file path for a conversation."""
-    return os.path.join(DATA_DIR, f"{conversation_id}.json")
+from .database import SessionLocal, ConversationDB
 
 
 def create_conversation(conversation_id: str) -> Dict[str, Any]:
@@ -28,21 +15,38 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
     Returns:
         New conversation dict
     """
-    ensure_data_dir()
+    db = SessionLocal()
+    try:
+        # Verifica se esiste già
+        existing = db.query(ConversationDB).filter(ConversationDB.id == conversation_id).first()
+        if existing:
+            return {
+                "id": existing.id,
+                "created_at": existing.created_at.isoformat(),
+                "title": existing.title,
+                "messages": existing.messages or []
+            }
 
-    conversation = {
-        "id": conversation_id,
-        "created_at": datetime.utcnow().isoformat(),
-        "title": "New Conversation",
-        "messages": []
-    }
+        new_conv = ConversationDB(
+            id=conversation_id,
+            title="New Conversation",
+            messages=[]
+        )
+        db.add(new_conv)
+        db.commit()
 
-    # Save to file
-    path = get_conversation_path(conversation_id)
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
-
-    return conversation
+        return {
+            "id": new_conv.id,
+            "created_at": new_conv.created_at.isoformat(),
+            "title": new_conv.title,
+            "messages": new_conv.messages or []
+        }
+    except Exception as e:
+        print(f"Errore creazione conversazione: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
@@ -55,13 +59,22 @@ def get_conversation(conversation_id: str) -> Optional[Dict[str, Any]]:
     Returns:
         Conversation dict or None if not found
     """
-    path = get_conversation_path(conversation_id)
-
-    if not os.path.exists(path):
+    db = SessionLocal()
+    try:
+        conv = db.query(ConversationDB).filter(ConversationDB.id == conversation_id).first()
+        if conv:
+            return {
+                "id": conv.id,
+                "title": conv.title,
+                "messages": conv.messages or [],
+                "created_at": conv.created_at.isoformat()
+            }
         return None
-
-    with open(path, 'r') as f:
-        return json.load(f)
+    except Exception as e:
+        print(f"Errore lettura conversazione: {e}")
+        return None
+    finally:
+        db.close()
 
 
 def save_conversation(conversation: Dict[str, Any]):
@@ -71,11 +84,30 @@ def save_conversation(conversation: Dict[str, Any]):
     Args:
         conversation: Conversation dict to save
     """
-    ensure_data_dir()
-
-    path = get_conversation_path(conversation['id'])
-    with open(path, 'w') as f:
-        json.dump(conversation, f, indent=2)
+    db = SessionLocal()
+    try:
+        conv = db.query(ConversationDB).filter(ConversationDB.id == conversation['id']).first()
+        
+        if conv:
+            # Aggiorna esistente
+            conv.messages = conversation.get('messages', [])
+            if 'title' in conversation:
+                conv.title = conversation['title']
+        else:
+            # Crea nuova
+            new_conv = ConversationDB(
+                id=conversation['id'],
+                title=conversation.get('title', 'New Conversation'),
+                messages=conversation.get('messages', [])
+            )
+            db.add(new_conv)
+        
+        db.commit()
+    except Exception as e:
+        print(f"Errore salvataggio conversazione: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 def list_conversations() -> List[Dict[str, Any]]:
@@ -85,26 +117,23 @@ def list_conversations() -> List[Dict[str, Any]]:
     Returns:
         List of conversation metadata dicts
     """
-    ensure_data_dir()
-
-    conversations = []
-    for filename in os.listdir(DATA_DIR):
-        if filename.endswith('.json'):
-            path = os.path.join(DATA_DIR, filename)
-            with open(path, 'r') as f:
-                data = json.load(f)
-                # Return metadata only
-                conversations.append({
-                    "id": data["id"],
-                    "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
-                })
-
-    # Sort by creation time, newest first
-    conversations.sort(key=lambda x: x["created_at"], reverse=True)
-
-    return conversations
+    db = SessionLocal()
+    try:
+        convs = db.query(ConversationDB).order_by(ConversationDB.created_at.desc()).all()
+        return [
+            {
+                "id": c.id,
+                "title": c.title,
+                "created_at": c.created_at.isoformat(),
+                "message_count": len(c.messages) if c.messages else 0
+            }
+            for c in convs
+        ]
+    except Exception as e:
+        print(f"Errore list conversazioni: {e}")
+        return []
+    finally:
+        db.close()
 
 
 def add_user_message(conversation_id: str, content: str):
@@ -164,9 +193,17 @@ def update_conversation_title(conversation_id: str, title: str):
         conversation_id: Conversation identifier
         title: New title for the conversation
     """
-    conversation = get_conversation(conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
-
-    conversation["title"] = title
-    save_conversation(conversation)
+    db = SessionLocal()
+    try:
+        conv = db.query(ConversationDB).filter(ConversationDB.id == conversation_id).first()
+        if conv:
+            conv.title = title
+            db.commit()
+        else:
+            raise ValueError(f"Conversation {conversation_id} not found")
+    except Exception as e:
+        print(f"Errore aggiornamento titolo: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()

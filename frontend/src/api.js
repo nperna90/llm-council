@@ -1,8 +1,11 @@
 /**
  * API client for the LLM Council backend.
+ * 
+ * IMPORTANT: Definisce l'URL del backend Python.
+ * Assicurati che la porta corrisponda a quella usata da uvicorn (default: 8001)
  */
 
-const API_BASE = 'http://localhost:8001';
+export const API_BASE = 'http://localhost:8001';
 
 export const api = {
   /**
@@ -49,7 +52,7 @@ export const api = {
   /**
    * Send a message in a conversation.
    */
-  async sendMessage(conversationId, content) {
+  async sendMessage(conversationId, content, tutorMode = false) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message`,
       {
@@ -57,7 +60,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, tutor_mode: tutorMode }),
       }
     );
     if (!response.ok) {
@@ -71,9 +74,10 @@ export const api = {
    * @param {string} conversationId - The conversation ID
    * @param {string} content - The message content
    * @param {function} onEvent - Callback function for each event: (eventType, data) => void
+   * @param {boolean} tutorMode - Enable tutor mode for simple explanations
    * @returns {Promise<void>}
    */
-  async sendMessageStream(conversationId, content, onEvent) {
+  async sendMessageStream(conversationId, content, onEvent, tutorMode = false) {
     const response = await fetch(
       `${API_BASE}/api/conversations/${conversationId}/message/stream`,
       {
@@ -81,7 +85,7 @@ export const api = {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, tutor_mode: tutorMode }),
       }
     );
 
@@ -121,8 +125,80 @@ export const api = {
       `${API_BASE}/api/conversations/${conversationId}/download_report`
     );
     if (!response.ok) {
-      throw new Error('Failed to download report');
+      // Prova a leggere il messaggio di errore dal backend
+      let errorMessage = 'Failed to download report';
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.detail || errorData.message || errorMessage;
+      } catch (e) {
+        // Se non è JSON, usa il testo della risposta
+        try {
+          const errorText = await response.text();
+          if (errorText) errorMessage = errorText;
+        } catch (e2) {
+          // Usa il messaggio di default
+        }
+      }
+      throw new Error(errorMessage);
     }
     return response;
+  },
+
+  /**
+   * Parse a document (PDF, CSV, etc.) and extract text.
+   */
+  async parseDocument(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE}/api/parse-document`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to parse document');
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Get current settings.
+   */
+  async getSettings() {
+    try {
+      const response = await fetch(`${API_BASE}/api/settings`);
+      if (!response.ok) {
+        throw new Error(`Failed to get settings: ${response.status} ${response.statusText}`);
+      }
+      return response.json();
+    } catch (error) {
+      console.error('Error fetching settings from:', `${API_BASE}/api/settings`, error);
+      throw error;
+    }
+  },
+
+  /**
+   * Update settings.
+   */
+  async saveSettings(settings) {
+    try {
+      const response = await fetch(`${API_BASE}/api/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(settings),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Failed to save settings: ${response.status} ${response.statusText} - ${errorText}`);
+      }
+      return response.json();
+    } catch (error) {
+      console.error('Error saving settings to:', `${API_BASE}/api/settings`, error);
+      throw error;
+    }
   },
 };

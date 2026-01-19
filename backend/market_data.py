@@ -9,8 +9,16 @@ for stocks/ETFs using yfinance. Designed to support different agent personas:
 """
 
 import yfinance as yf
+import pandas as pd
+import numpy as np
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+from .cache_manager import cached_data
+from .search_tool import get_latest_news
+from .analytics import get_performance_metrics, check_leverage_decay
+from .fundamentals import get_fundamental_ratios
+from .correlation import get_portfolio_correlation
+from .backtester import run_quick_backtest
 
 
 def get_market_data(ticker: str, period: str = "1y") -> Dict[str, Any]:
@@ -325,46 +333,179 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print(f"Test completed at {portfolio['timestamp']}")
     print("=" * 80)
+def calculate_rsi(prices: pd.Series, period: int = 14) -> Optional[float]:
+    """
+    Calcola l'RSI (Relative Strength Index) manualmente.
+    
+    Args:
+        prices: Serie pandas con i prezzi di chiusura
+        period: Periodo per il calcolo RSI (default 14)
+        
+    Returns:
+        Valore RSI (0-100) o None se non calcolabile
+    """
+    if prices.empty or len(prices) < period + 1:
+        return None
+    
+    try:
+        # Calcola le variazioni di prezzo
+        delta = prices.diff()
+        
+        # Separa guadagni e perdite
+        gains = delta.where(delta > 0, 0)
+        losses = -delta.where(delta < 0, 0)
+        
+        # Calcola la media mobile esponenziale (EMA) dei guadagni e perdite)
+        avg_gain = gains.ewm(span=period, adjust=False).mean()
+        avg_loss = losses.ewm(span=period, adjust=False).mean()
+        
+        # Calcola RS (Relative Strength)
+        rs = avg_gain / avg_loss
+        
+        # Calcola RSI
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Restituisci l'ultimo valore
+        return float(rsi.iloc[-1]) if not rsi.empty else None
+    except Exception as e:
+        print(f"Errore calcolo RSI: {e}")
+        return None
+
+
+@cached_data(ttl_seconds=300)
 def get_llm_context_string(tickers: List[str]) -> str:
     """
-    Funzione Helper che recupera tutto (Dati + News) e restituisce
+    Funzione Helper che recupera tutto (Dati + News + Analisi Tecnica) e restituisce
     una SINGOLA STRINGA formattata pronta per il prompt dell'AI.
+    Ora con CACHE: i dati durano 5 minuti.
     """
+    if not tickers:
+        return "Nessun ticker specificato."
+
+    print(f"📥 Scarico dati per contesto: {tickers}")
+    
     data_map = get_multiple_tickers(tickers)
     
     timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
     report = f"--- REAL-TIME MARKET SNAPSHOT ({timestamp}) ---\n"
     report += "NOTA: Usa questi dati come unica fonte di verità. I prezzi sono aggiornati.\n\n"
 
+    # Sezioni separate per organizzare meglio i dati
+    section_quant = "--- DATI QUANTITATIVI, TECNICI E FONDAMENTALI (v2.0) ---\n"
+    section_macro = "--- ULTIME NEWS DAL WEB (LIVE) ---\n"
+
+    # --- 1. DATI PORTAFOGLIO (Correlazione + Backtest) ---
+    print(f"⏳ Eseguo calcoli complessi per {tickers}...")
+    
+    correlation_report = get_portfolio_correlation(tickers)
+    
+    # NOVITÀ: Chiamata al Backtest
+    # Passiamo 'SPY' come benchmark standard
+    backtest_report = run_quick_backtest(tickers, benchmark='SPY', period='5y')
+    
+    # Costruiamo la sezione Quant
+    if correlation_report or backtest_report:
+        section_quant += f"{correlation_report}\n"
+        section_quant += f"{backtest_report}\n\n"
+        section_quant += "-"*40 + "\n"
+
     for ticker, data in data_map.items():
         if "error" in data:
-            report += f"❌ {ticker}: Errore download ({data['error']})\n"
+            section_quant += f"❌ {ticker}: Errore download ({data['error']})\n"
             continue
 
         info = data.get("info", {})
         fund = data.get("fundamentals", {})
         news = data.get("news", [])
+        price_data = data.get("price_data", pd.DataFrame())
         
         # Dati Essenziali
         price = data.get("current_price", "N/A")
         if isinstance(price, float): price = f"${price:.2f}"
         
-        # Costruzione blocco dati
-        report += f"📊 {ticker} ({info.get('shortName', ticker)})\n"
-        report += f"   • Prezzo: {price} | P/E: {fund.get('pe_ratio', 'N/A')} | Beta: {fund.get('beta', 'N/A')}\n"
+        # ANALISI TECNICA: Calcolo RSI
+        technical_msg = ""
+        try:
+            if not price_data.empty and 'Close' in price_data.columns:
+                # Prendiamo almeno 6 mesi di storia per calcolare RSI
+                hist = price_data.tail(180)  # ~6 mesi di dati giornalieri
+                
+                if len(hist) >= 15:  # Serve almeno 15 giorni per RSI(14)
+                    rsi = calculate_rsi(hist['Close'], period=14)
+                    
+                    if rsi is not None:
+                        rsi_status = "Neutrale"
+                        if rsi > 70:
+                            rsi_status = "IPERCOMPRATO (Rischio storno)"
+                        elif rsi < 30:
+                            rsi_status = "IPERVENDUTO (Possibile rimbalzo)"
+                        
+                        technical_msg = f" | RSI(14): {rsi:.1f} [{rsi_status}]"
+        except Exception as e:
+            print(f"Errore Tech Analysis su {ticker}: {e}")
+            # Continua senza RSI se c'è un errore
         
-        # Aggiunta News (La parte nuova!)
+        # --- ANALYTICS v2.0 ---
+        perf = get_performance_metrics(ticker)
+        perf_str = ""
+        technical_levels = ""
+        
+        if perf:
+            # Logica SMA per l'LLM
+            sma_note = ""
+            if perf['dist_sma_200'] is not None:
+                trend = "Rialzista" if perf['dist_sma_200'] > 0 else "Ribassista"
+                sma_note = f" | Trend 200gg: {trend} ({perf['dist_sma_200']}% vs SMA200)"
+            else:
+                sma_note = " | Dati storici insufficienti per trend lungo"
+
+            risk_icon = "🟢"
+            if perf['max_drawdown'] < -30: risk_icon = "🟠"
+            if perf['max_drawdown'] < -50: risk_icon = "🔴"
+            
+            # Check Volatility Drag per asset a leva
+            leverage_warning = check_leverage_decay(ticker, perf['volatility'])
+            
+            perf_str = (
+                f"\n   └─ ⏳ HISTORY & TREND:\n"
+                f"      • 1Y Perf: {perf['return_1y']}% | Drawdown: {perf['max_drawdown']}% {risk_icon}\n"
+                f"      • Volatilità: {perf['volatility']}%\n"
+                f"      • Livelli Chiave: SMA50 ${perf['sma_50']} | SMA200 ${perf['sma_200']}{sma_note}"
+            )
+            
+            # Aggiungi warning Volatility Drag se presente
+            if leverage_warning:
+                perf_str += f"\n      {leverage_warning}"
+        
+        # --- NUOVO: WARREN BUFFETT MODE ---
+        fundamentals_str = get_fundamental_ratios(ticker)
+        
+        # Costruzione blocco dati quantitativi
+        section_quant += f"📊 {ticker} ({info.get('shortName', ticker)})\n"
+        section_quant += f"   • Prezzo: {price} | P/E: {fund.get('pe_ratio', 'N/A')} | Beta: {fund.get('beta', 'N/A')}{technical_msg}{perf_str}{fundamentals_str}\n"
+        
+        # Aggiunta News da Yahoo Finance (esistenti)
         if news:
-            report += "   • 📰 NEWS RECENTI:\n"
+            section_quant += "   • 📰 NEWS RECENTI (Yahoo Finance):\n"
             # Prendiamo solo le prime 2 news per non intasare il prompt
             for n in news[:2]:
                 title = n.get('title', 'Nessun titolo')
                 publisher = n.get('publisher', 'Fonte sconosciuta')
-                report += f"     - [{publisher}] {title}\n"
-        else:
-            report += "   • (Nessuna news recente rilevante)\n"
+                section_quant += f"     - [{publisher}] {title}\n"
         
-        report += "\n"
+        section_quant += "\n"
+        
+        # --- NUOVO: WEB SEARCH ---
+        # Cerchiamo "Ticker Stock News" o "Ticker Financial News"
+        try:
+            news_text = get_latest_news(f"{ticker} stock news financial", max_results=2)
+            section_macro += f"📰 NEWS SU {ticker}:\n{news_text}\n\n"
+        except Exception as e:
+            print(f"Errore ricerca web news per {ticker}: {e}")
+            section_macro += f"📰 NEWS SU {ticker}: Errore nel recupero news web.\n\n"
 
-    report += "--- END OF SNAPSHOT ---"
+    report += section_quant
+    report += "\n"
+    report += section_macro
+    report += "\n--- END OF SNAPSHOT ---"
     return report

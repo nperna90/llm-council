@@ -1,70 +1,46 @@
-import json
-import os
+from .database import SessionLocal, MemoryDB
 from datetime import datetime
-from typing import List, Dict
-
-# File dove salveremo la storia
-MEMORY_FILE = "data/memory_log.json"
-
-def init_memory():
-    """Crea il file di memoria se non esiste."""
-    if not os.path.exists("data"):
-        os.makedirs("data")
-    if not os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump([], f)
+from typing import List
 
 def add_memory(title: str, summary: str, tags: List[str] = []):
-    """
-    Aggiunge un nuovo ricordo al diario di bordo.
-    Viene chiamato quando generi un Report PDF.
-    """
-    init_memory()
-    
-    new_entry = {
-        "id": datetime.now().strftime("%Y%m%d%H%M%S"),
-        "date": datetime.now().strftime("%Y-%m-%d"),
-        "title": title,
-        "summary": summary, # La decisione finale del Council
-        "tags": tags
-    }
-    
-    # Leggi, aggiungi, salva
+    """Salva un ricordo nel Database SQLite."""
+    db = SessionLocal()
     try:
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            memories = json.load(f)
-    except:
-        memories = []
-        
-    memories.append(new_entry)
-    
-    with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-        json.dump(memories, f, indent=2, ensure_ascii=False)
-    
-    print(f"🧠 Memoria salvata: {title}")
+        new_mem = MemoryDB(
+            date=datetime.now().strftime("%Y-%m-%d"),
+            title=title,
+            summary=summary,
+            tags=",".join(tags) if tags else ""
+        )
+        db.add(new_mem)
+        db.commit()
+        print(f"🧠 Memoria salvata su DB: {title}")
+    except Exception as e:
+        print(f"Errore salvataggio memoria: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 def get_relevant_context(limit=3) -> str:
-    """
-    Recupera gli ultimi 'limit' ricordi per iniettarli nel prompt del Council.
-    """
-    init_memory()
+    """Recupera gli ultimi ricordi dal DB."""
+    db = SessionLocal()
     try:
-        with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
-            memories = json.load(f)
-    except:
-        return ""
+        # Query SQL: Prendi gli ultimi N ordinati per ID decrescente
+        memories = db.query(MemoryDB).order_by(MemoryDB.id.desc()).limit(limit).all()
+        
+        if not memories:
+            return ""
 
-    if not memories:
+        context_string = "\n[STORICO DECISIONI PASSATE (MEMORY LOG)]\n"
+        for mem in memories:
+            context_string += f"- Data: {mem.date} | Oggetto: {mem.title}\n"
+            context_string += f"  Decisione: {mem.summary[:500]}...\n"
+            context_string += "-" * 20 + "\n"
+        context_string += "[FINE STORICO]\n"
+        
+        return context_string
+    except Exception as e:
+        print(f"Errore recupero memoria: {e}")
         return ""
-
-    # Prendiamo gli ultimi N ricordi
-    recent_memories = memories[-limit:]
-    
-    context_string = "\n[STORICO DECISIONI PASSATE (MEMORY LOG)]\n"
-    for mem in recent_memories:
-        context_string += f"- Data: {mem['date']} | Oggetto: {mem['title']}\n"
-        context_string += f"  Decisione: {mem['summary'][:500]}...\n" # Tagliamo se troppo lungo
-        context_string += "-" * 20 + "\n"
-    
-    context_string += "[FINE STORICO]\n"
-    return context_string
+    finally:
+        db.close()

@@ -7,6 +7,15 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Agent Identity Colors */
+  --color-chairman: #d4af37; /* Oro - Autorità */
+  --color-bogle: #10b981;    /* Verde - Sicurezza/Vanguard */
+  --color-quant: #3b82f6;    /* Blu Elettrico - Dati/Tech */
+  --color-macro: #8b5cf6;    /* Viola - Visione Globale */
+  --color-risk: #ef4444;     /* Rosso - Pericolo/Attenzione */
+  --bg-dark: #111827;
+  --bg-card: #1f2937;
 }
 
 * {
@@ -95,4 +104,90 @@ body {
   padding-left: 16px;
   border-left: 4px solid #ddd;
   color: #666;
+}
+
+/* Agent Card Styles */
+.agent-card {
+  border-left: 4px solid transparent;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 0 8px 8px 0;
+  transition: all 0.3s ease;
+}
+
+.agent-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.agent-boglehead {
+  border-color: var(--color-bogle);
+  background: rgba(16, 185, 129, 0.05);
+}
+
+.agent-quant {
+  border-color: var(--color-quant);
+  background: rgba(59, 130, 246, 0.05);
+}
+
+.agent-macro {
+  border-color: var(--color-macro);
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.agent-risk {
+  border-color: #ef4444; /* Rosso Tailwind (red-500) */
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.05) 0%, transparent 100%);
+}
+
+.agent-chairman {
+  border-color: var(--color-chairman);
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.1) 0%, transparent 100%);
+  box-shadow: 0 2px 8px rgba(212, 175, 55, 0.1);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.4s ease-out;
+}
+
+@keyframes spin-slow {
+  from { 
+    transform: rotate(0deg); 
+  }
+  to { 
+    transform: rotate(360deg); 
+  }
+}
+
+@keyframes bounce {
+  0%, 100% {
+    transform: translateX(-50%) translateY(0);
+  }
+  50% {
+    transform: translateX(-50%) translateY(-20px);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.status-indicator {
+  animation: fade-in 0.3s ease-out;
 }

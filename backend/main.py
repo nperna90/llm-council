@@ -1,6 +1,6 @@
 """FastAPI backend for LLM Council."""
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
@@ -9,14 +9,34 @@ import uuid
 import json
 import asyncio
 import os
+import re
 
 from . import storage
 from . import market_data
-from . import create_report
+from . import create_report_html as create_report
 from . import memory
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from . import file_parser
+from . import settings
+from . import cache_manager
+from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings, THERAPIST_PROMPT
+from .openrouter import query_model
+from .config import CHAIRMAN_MODEL
 
 app = FastAPI(title="LLM Council API")
+
+
+def extract_tickers(text: str) -> list:
+    """
+    Estrae i ticker dal testo.
+    MODIFICA v2.6: Modalità "Solo Dollaro".
+    Accetta SOLO i ticker espliciti con il prefisso $ (es. $NVDA).
+    Ignora qualsiasi altra parola maiuscola per massima efficienza e zero errori.
+    """
+    # 1. Cerca SOLO i pattern con il dollaro esplicito (es. $NVDA, $TSLA)
+    explicit_tickers = re.findall(r'\$([A-Z]{1,5})', text.upper())
+    
+    # Rimuoviamo duplicati e restituiamo la lista pulita
+    return list(set(explicit_tickers))
 
 # Enable CORS for local development
 app.add_middleware(
@@ -36,6 +56,7 @@ class CreateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     """Request to send a message in a conversation."""
     content: str
+    tutor_mode: bool = False  # Nuovo parametro, default spento (Pro Mode)
 
 
 class ConversationMetadata(BaseModel):
@@ -52,6 +73,13 @@ class Conversation(BaseModel):
     created_at: str
     title: str
     messages: List[Dict[str, Any]]
+
+
+class SettingsUpdate(BaseModel):
+    """Request to update settings."""
+    watchlist: List[str]
+    risk_profile: str = "Balanced"
+    council_mode: str = "Standard"
 
 
 # --- CONFIGURAZIONE PORTAFOGLIO ---
@@ -82,6 +110,74 @@ ACTIVE_WATCHLIST = [
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
+
+
+@app.post("/api/parse-document")
+async def parse_document_endpoint(file: UploadFile = File(...)):
+    """
+    Riceve un file, estrae il testo e lo restituisce al frontend.
+    Non salviamo il file su disco per privacy, lo processiamo in memoria.
+    """
+    content = await file.read()
+    extracted_text = file_parser.parse_document(content, file.filename)
+
+    return {"filename": file.filename, "text": extracted_text}
+
+
+@app.get("/api/market-history/{ticker}")
+async def get_market_history(ticker: str):
+    """
+    Restituisce lo storico dei prezzi di un ticker per visualizzazione grafico.
+    """
+    import yfinance as yf
+    try:
+        # Scarica 1 anno di dati
+        ticker_obj = yf.Ticker(ticker)
+        hist = ticker_obj.history(period="1y")
+        
+        if hist.empty:
+            return []
+        
+        # Formatta per Recharts (Array di oggetti)
+        data = []
+        for date, row in hist.iterrows():
+            data.append({
+                "date": date.strftime('%Y-%m-%d'),
+                "price": float(row['Close']),
+                "volume": int(row['Volume']) if 'Volume' in row else 0
+            })
+        
+        # Ordina per data (più vecchio -> più recente)
+        data.sort(key=lambda x: x['date'])
+        
+        return data
+    except Exception as e:
+        print(f"Errore recupero storico {ticker}: {e}")
+        return []
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """Restituisce le impostazioni correnti."""
+    return settings.load_settings()
+
+
+@app.post("/api/settings")
+async def update_settings(data: SettingsUpdate):
+    """Aggiorna le impostazioni."""
+    settings.save_settings({
+        "watchlist": data.watchlist,
+        "risk_profile": data.risk_profile,
+        "council_mode": data.council_mode
+    })
+    return {"status": "success", "settings": settings.load_settings()}
+
+
+@app.post("/api/refresh-data")
+async def refresh_market_data():
+    """Forza la pulizia della cache per scaricare nuovi dati."""
+    cache_manager.clear_cache()
+    return {"status": "Cache cleared", "message": "I prossimi dati saranno scaricati freschi da Yahoo Finance."}
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
@@ -124,6 +220,38 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Get conversation history (all messages except the one we're about to add)
     conversation_history = conversation["messages"]
 
+    # --- LOGICA PANIC MODE ---
+    if request.content.strip() == "🚨 PANIC_MODE_TRIGGER 🚨":
+        print("🚨 PANIC MODE ATTIVATO!")
+        # Bypassiamo tutto il download dati. Serve psicologia, non numeri.
+        storage.add_user_message(conversation_id, "Aiutami, sto perdendo soldi e voglio vendere tutto adesso!")
+        
+        # Chiamata diretta al Dr. Market
+        therapist_messages = [
+            {"role": "system", "content": THERAPIST_PROMPT},
+            {"role": "user", "content": "Aiutami, sto perdendo soldi e voglio vendere tutto adesso!"}
+        ]
+        
+        therapist_response = await query_model(CHAIRMAN_MODEL, therapist_messages)
+        
+        if therapist_response is None:
+            therapist_response = {"content": "Errore: Impossibile generare risposta di supporto."}
+        
+        # Salviamo come risposta del council (formato compatibile)
+        storage.add_assistant_message(
+            conversation_id,
+            [{"model": "Dr. Market", "response": therapist_response.get('content', '')}],
+            [],
+            {"model": "Dr. Market", "response": therapist_response.get('content', '')}
+        )
+        
+        return {
+            "stage1": [{"model": "Dr. Market", "response": therapist_response.get('content', '')}],
+            "stage2": [],
+            "stage3": {"model": "Dr. Market", "response": therapist_response.get('content', '')},
+            "metadata": {}
+        }
+
     # Add user message (salviamo il messaggio originale)
     storage.add_user_message(conversation_id, request.content)
 
@@ -135,8 +263,24 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # --- INIZIO INTEGRAZIONE DATI DI MERCATO E MEMORIA ---
     try:
         print("🔄 Scaricamento dati di mercato in tempo reale...")
-        # Usiamo la nuova funzione che ci dà la stringa con le news
-        market_context = market_data.get_llm_context_string(ACTIVE_WATCHLIST)
+        # 1. Recupera la watchlist salvata (quelli fissi)
+        active_tickers = settings.get_watchlist()
+        
+        # 2. --- RILEVAMENTO TICKER ESPLICITO ($) ---
+        # Usa la funzione extract_tickers che accetta SOLO ticker con prefisso $
+        detected_tickers = extract_tickers(request.content)
+        
+        # Unione finale: Watchlist + Ticker Espliciti
+        full_ticker_list = list(set(active_tickers + detected_tickers))
+        
+        if detected_tickers:
+            print(f"🎯 Ticker Espliciti Rilevati: {detected_tickers}")
+        
+        print(f"📋 Lista completa per LLM: {full_ticker_list}")
+        # ----------------------------------------
+        
+        # 3. Scarica i dati e genera il contesto
+        market_context = market_data.get_llm_context_string(full_ticker_list)
         
         # Recupera il contesto storico dalla memoria
         memory_context = memory.get_relevant_context(limit=3)
@@ -174,7 +318,8 @@ USER QUESTION:
     # Usiamo augmented_content che include i dati di mercato e la memoria storica
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
         augmented_content,
-        conversation_history
+        conversation_history,
+        tutor_mode=request.tutor_mode
     )
 
     # Add assistant message with all stages
@@ -211,11 +356,69 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     # Get conversation history (all messages except the one we're about to add)
     conversation_history = conversation["messages"]
 
+    # --- LOGICA PANIC MODE ---
+    if request.content.strip() == "🚨 PANIC_MODE_TRIGGER 🚨":
+        print("🚨 PANIC MODE ATTIVATO (Streaming)!")
+        
+        async def panic_event_generator():
+            try:
+                storage.add_user_message(conversation_id, "Aiutami, sto perdendo soldi e voglio vendere tutto adesso!")
+                
+                yield f"data: {json.dumps({'type': 'panic_mode_start'})}\n\n"
+                
+                # Chiamata diretta al Dr. Market
+                therapist_messages = [
+                    {"role": "system", "content": THERAPIST_PROMPT},
+                    {"role": "user", "content": "Aiutami, sto perdendo soldi e voglio vendere tutto adesso!"}
+                ]
+                
+                therapist_response = await query_model(CHAIRMAN_MODEL, therapist_messages)
+                
+                if therapist_response:
+                    yield f"data: {json.dumps({'type': 'stage3_complete', 'data': {'model': 'Dr. Market', 'response': therapist_response.get('content', '')}})}\n\n"
+                    
+                    # Salva la risposta
+                    storage.add_assistant_message(
+                        conversation_id,
+                        [{"model": "Dr. Market", "response": therapist_response.get('content', '')}],
+                        [],
+                        {"model": "Dr. Market", "response": therapist_response.get('content', '')}
+                    )
+                
+                yield f"data: {json.dumps({'type': 'complete'})}\n\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        
+        return StreamingResponse(
+            panic_event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+
     # --- INIZIO INTEGRAZIONE DATI DI MERCATO E MEMORIA ---
     try:
         print("🔄 Scaricamento dati di mercato in tempo reale...")
-        # Usiamo la nuova funzione che ci dà la stringa con le news
-        market_context = market_data.get_llm_context_string(ACTIVE_WATCHLIST)
+        # 1. Recupera la watchlist salvata (quelli fissi)
+        active_tickers = settings.get_watchlist()
+        
+        # 2. --- RILEVAMENTO TICKER ESPLICITO ($) ---
+        # Usa la funzione extract_tickers che accetta SOLO ticker con prefisso $
+        detected_tickers = extract_tickers(request.content)
+        
+        # Unione finale: Watchlist + Ticker Espliciti
+        full_ticker_list = list(set(active_tickers + detected_tickers))
+        
+        if detected_tickers:
+            print(f"🎯 Ticker Espliciti Rilevati: {detected_tickers}")
+        
+        print(f"📋 Lista completa per LLM: {full_ticker_list}")
+        # ----------------------------------------
+        
+        # 3. Scarica i dati e genera il contesto
+        market_context = market_data.get_llm_context_string(full_ticker_list)
         
         # Recupera il contesto storico dalla memoria
         memory_context = memory.get_relevant_context(limit=3)
@@ -272,7 +475,7 @@ USER QUESTION:
 
             # Stage 3: Synthesize final answer
             yield f"data: {json.dumps({'type': 'stage3_start'})}\n\n"
-            stage3_result = await stage3_synthesize_final(augmented_content, stage1_results, stage2_results, conversation_history)
+            stage3_result = await stage3_synthesize_final(augmented_content, stage1_results, stage2_results, conversation_history, tutor_mode=request.tutor_mode)
             yield f"data: {json.dumps({'type': 'stage3_complete', 'data': stage3_result})}\n\n"
 
             # Wait for title generation if it was started
@@ -317,6 +520,13 @@ async def download_report(conversation_id: str):
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Verifica che ci siano messaggi
+    if not conversation.get('messages') or len(conversation['messages']) == 0:
+        raise HTTPException(
+            status_code=400, 
+            detail="Conversation has no messages. Cannot generate PDF for empty conversation."
+        )
+    
     # --- LOGICA DI FILTRO INTELLIGENTE ---
     full_text = ""
     
@@ -324,6 +534,7 @@ async def download_report(conversation_id: str):
     full_text += "## Introduzione\n"
     full_text += "Il seguente documento riassume l'analisi strategica condotta dal Council AI in risposta ai quesiti dell'investitore.\n\n"
 
+    has_stage3_content = False
     for msg in conversation['messages']:
         role = msg['role']
         content = msg.get('content', '')
@@ -347,7 +558,8 @@ async def download_report(conversation_id: str):
             stage3 = msg.get('stage3', {})
             if stage3:
                 response = stage3.get('response', '')
-                if response:
+                if response and len(response.strip()) > 0:
+                    has_stage3_content = True
                     # Verifica se è una sintesi finale valida
                     is_final_synthesis = (
                         "synthesis" in response.lower() or 
@@ -363,6 +575,13 @@ async def download_report(conversation_id: str):
                         # Se non è chiaramente una sintesi, la includiamo comunque come analisi
                         full_text += f"## ANALISI DI DETTAGLIO\n{response}\n\n"
     # --- FINE FILTRO ---
+    
+    # Verifica che ci sia contenuto Stage 3
+    if not has_stage3_content:
+        raise HTTPException(
+            status_code=400, 
+            detail="Conversation has no completed Stage 3 responses. Please wait for the Council to complete its analysis before downloading the PDF."
+        )
 
     # --- NUOVO BLOCCO: Salvataggio Memoria ---
     # Cerchiamo di estrarre solo la sintesi per salvarla nella memoria
@@ -380,7 +599,8 @@ async def download_report(conversation_id: str):
     
     # Estraiamo i tag dai ticker menzionati nel titolo o nel contenuto
     tags = []
-    for ticker in ACTIVE_WATCHLIST:
+    current_watchlist = settings.get_watchlist()
+    for ticker in current_watchlist:
         if ticker in chat_title.upper() or ticker in full_text.upper():
             tags.append(ticker)
     
@@ -393,12 +613,48 @@ async def download_report(conversation_id: str):
 
     # 3. Genera il PDF
     title = conversation.get('title', 'Investment Analysis')
-    pdf_path = create_report.generate_pdf(conversation_id, title, full_text)
-
-    if pdf_path and os.path.exists(pdf_path):
-        return FileResponse(pdf_path, filename=os.path.basename(pdf_path), media_type='application/pdf')
-    else:
-        raise HTTPException(status_code=500, detail="Error generating PDF")
+    
+    # Verifica che ci sia contenuto da generare
+    if not full_text or len(full_text.strip()) < 50:
+        raise HTTPException(
+            status_code=400, 
+            detail="Conversation has no content to generate PDF. Make sure the conversation has messages with stage3 responses."
+        )
+    
+    try:
+        print(f"📄 Generazione PDF per conversazione {conversation_id[:8]}...")
+        print(f"   Titolo: {title}")
+        print(f"   Lunghezza contenuto: {len(full_text)} caratteri")
+        
+        pdf_path = create_report.generate_pdf(conversation_id, title, full_text)
+        
+        if not pdf_path:
+            print("❌ PDF generation returned None")
+            raise HTTPException(status_code=500, detail="PDF generation returned None. Check server logs for details.")
+        
+        print(f"✅ PDF generato: {pdf_path}")
+        
+        if not os.path.exists(pdf_path):
+            print(f"❌ PDF file not found at: {pdf_path}")
+            raise HTTPException(status_code=500, detail=f"PDF file not found at: {pdf_path}")
+        
+        print(f"📤 Invio PDF al client...")
+        return FileResponse(
+            pdf_path, 
+            filename=os.path.basename(pdf_path), 
+            media_type='application/pdf'
+        )
+    except HTTPException:
+        # Rilancia le HTTPException così come sono
+        raise
+    except Exception as e:
+        print(f"❌ Error generating PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Error generating PDF: {str(e)}. Check server console for details."
+        )
 
 
 if __name__ == "__main__":
