@@ -453,10 +453,15 @@ def get_llm_context_string(tickers: list) -> str:
             except Exception as e:
                 print(f"[WARN] Errore calcolo technicals per {ticker}: {e}")
             
-            # Fundamentals (Richiede chiamata singola per ora, ma è cachata)
-            fund_str = fundamentals.get_fundamental_ratios(ticker)
-            if fund_str:
-                context_parts.append(fund_str)
+            # Enhanced Fundamentals (cached, single API call per ticker)
+            try:
+                fund_data = fundamentals.get_enhanced_fundamentals(ticker)
+                if fund_data:
+                    fund_str = fundamentals.format_fundamentals_for_llm(fund_data)
+                    if fund_str:
+                        context_parts.append(fund_str)
+            except Exception as e:
+                print(f"[WARN] Errore calcolo fundamentals per {ticker}: {e}")
             
             # --- INTEGRAZIONE NEWS ---
             print(f"[NEWS] Scaricamento news per {ticker}...")
