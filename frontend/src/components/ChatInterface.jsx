@@ -6,7 +6,8 @@ import Stage3 from './Stage3';
 import StatusIndicator from './StatusIndicator';
 import SettingsModal from './SettingsModal';
 import MarketOverview from './MarketOverview';
-import { extractTickers } from './TickerLink';
+import TutorToggle from './TutorToggle';
+import EcoToggle from './EcoToggle';
 import { api } from '../api';
 import './ChatInterface.css';
 
@@ -14,6 +15,7 @@ export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  onStopGeneration,
   onTickerClick,
   onNewMessage,
 }) {
@@ -22,6 +24,7 @@ export default function ChatInterface({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMarketOverviewOpen, setIsMarketOverviewOpen] = useState(false);
   const [isTutorMode, setIsTutorMode] = useState(false); // Default false (Pro Mode)
+  const [ecoMode, setEcoMode] = useState(false); // Default false (Full Mode)
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -62,9 +65,39 @@ export default function ChatInterface({
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (input.trim() && !isLoading) {
-      onSendMessage(input, isTutorMode);
+    console.log('📝 handleSubmit chiamato:', { 
+      input: input.trim(), 
+      inputLength: input.trim().length,
+      isLoading, 
+      hasOnSendMessage: !!onSendMessage,
+      tutorMode: isTutorMode,
+      ecoMode: ecoMode
+    });
+    
+    if (!input.trim()) {
+      console.warn('⚠️ Input vuoto, messaggio non inviato');
+      return;
+    }
+    
+    if (isLoading) {
+      console.warn('⚠️ Già in caricamento, messaggio non inviato');
+      return;
+    }
+    
+    if (!onSendMessage) {
+      console.error('❌ onSendMessage non disponibile!');
+      alert('Errore: funzione di invio non disponibile. Ricarica la pagina.');
+      return;
+    }
+    
+    console.log('✅ Invio messaggio...');
+    try {
+      onSendMessage(input.trim(), isTutorMode, ecoMode);
       setInput('');
+      console.log('✅ Messaggio inviato, input pulito');
+    } catch (error) {
+      console.error('❌ Errore durante invio:', error);
+      alert('Errore durante l\'invio: ' + error.message);
     }
   };
 
@@ -146,8 +179,59 @@ export default function ChatInterface({
       <div className="chat-interface">
         <div className="empty-state">
           <h2>Welcome to LLM Council</h2>
-          <p>Create a new conversation to get started</p>
+          <p>Inizia a scrivere un messaggio per creare automaticamente una nuova conversazione</p>
         </div>
+        {/* Mostra il form di input anche senza conversazione */}
+        <form className="input-form" onSubmit={handleSubmit}>
+          <textarea
+            className="message-input"
+            placeholder="Scrivi qui il tuo messaggio per iniziare..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={isLoading}
+            rows={3}
+            style={{ flex: 1 }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <EcoToggle isEnabled={ecoMode} onToggle={setEcoMode} disabled={isLoading} />
+            <TutorToggle isEnabled={isTutorMode} onToggle={setIsTutorMode} disabled={isLoading} />
+          </div>
+          {isLoading && onStopGeneration ? (
+            <button
+              type="button"
+              className="stop-button"
+              onClick={onStopGeneration}
+              style={{
+                padding: '10px 20px',
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: '500',
+                fontSize: '14px',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#c82333';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#dc3545';
+              }}
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!input.trim() || isLoading}
+            >
+              Send
+            </button>
+          )}
+        </form>
       </div>
     );
   }
@@ -158,47 +242,6 @@ export default function ChatInterface({
         <div className="chat-header">
           <h2 className="chat-title">{conversation.title || 'LLM Council Conversation'}</h2>
           <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            {/* TOGGLE TUTOR MODE */}
-            <button
-              onClick={() => setIsTutorMode(!isTutorMode)}
-              className="tutor-toggle-button"
-              title={isTutorMode ? "Disattiva spiegazioni semplici" : "Attiva spiegazioni semplici"}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '8px 12px',
-                borderRadius: '9999px',
-                border: '1px solid',
-                cursor: 'pointer',
-                fontSize: '14px',
-                fontWeight: '500',
-                transition: 'all 0.2s',
-                ...(isTutorMode ? {
-                  background: '#2563eb',
-                  borderColor: '#60a5fa',
-                  color: 'white',
-                  boxShadow: '0 0 10px rgba(37, 99, 235, 0.5)'
-                } : {
-                  background: '#374151',
-                  borderColor: '#4b5563',
-                  color: '#9ca3af'
-                })
-              }}
-              onMouseEnter={(e) => {
-                if (!isTutorMode) {
-                  e.currentTarget.style.background = '#4b5563';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isTutorMode) {
-                  e.currentTarget.style.background = '#374151';
-                }
-              }}
-            >
-              <span style={{ fontSize: '18px' }}>{isTutorMode ? '🎓' : '💼'}</span>
-              <span>{isTutorMode ? 'Tutor ON' : 'Pro Mode'}</span>
-            </button>
             {/* IL PANIC BUTTON */}
             <button
               onClick={() => onSendMessage("🚨 PANIC_MODE_TRIGGER 🚨", false)}
@@ -406,75 +449,6 @@ export default function ChatInterface({
                     </div>
                   )}
                   {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
-
-                  {/* Barra Ticker Rilevati - Mostra i ticker menzionati nel messaggio */}
-                  {(() => {
-                    if (!onTickerClick) return null;
-                    
-                    // Estrai tutti i ticker dal messaggio
-                    const allText = [
-                      msg.stage1 ? JSON.stringify(msg.stage1) : '',
-                      msg.stage2 ? JSON.stringify(msg.stage2) : '',
-                      msg.stage3?.response || ''
-                    ].join(' ');
-                    
-                    const tickers = extractTickers(allText);
-                    const uniqueTickers = [...new Set(tickers.map(t => t.ticker))];
-                    
-                    if (uniqueTickers.length === 0) return null;
-                    
-                    return (
-                      <div className="ticker-bar" style={{
-                        marginTop: '12px',
-                        padding: '8px 12px',
-                        background: '#f0f7ff',
-                        border: '1px solid #d0e7ff',
-                        borderRadius: '6px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        flexWrap: 'wrap'
-                      }}>
-                        <span style={{ 
-                          fontSize: '12px', 
-                          fontWeight: '600', 
-                          color: '#666',
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.5px'
-                        }}>
-                          Ticker rilevati:
-                        </span>
-                        {uniqueTickers.map((ticker) => (
-                          <button
-                            key={ticker}
-                            onClick={() => onTickerClick(ticker)}
-                            style={{
-                              padding: '4px 10px',
-                              background: '#ffffff',
-                              border: '1px solid #3b82f6',
-                              borderRadius: '4px',
-                              color: '#3b82f6',
-                              fontSize: '12px',
-                              fontWeight: 'bold',
-                              fontFamily: 'monospace',
-                              cursor: 'pointer',
-                              transition: 'all 0.2s'
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = '#3b82f6';
-                              e.currentTarget.style.color = '#ffffff';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = '#ffffff';
-                              e.currentTarget.style.color = '#3b82f6';
-                            }}
-                          >
-                            {ticker}
-                          </button>
-                        ))}
-                      </div>
-                    );
-                  })()}
                 </div>
               )}
             </div>
@@ -558,13 +532,47 @@ export default function ChatInterface({
             rows={3}
             style={{ flex: 1 }}
           />
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim() || isLoading}
-          >
-            Send
-          </button>
+          
+          {/* TOGGLES */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <EcoToggle isEnabled={ecoMode} onToggle={setEcoMode} />
+            <TutorToggle isEnabled={isTutorMode} onToggle={setIsTutorMode} />
+          </div>
+          
+          {isLoading && onStopGeneration ? (
+            <button
+              type="button"
+              className="stop-button"
+              onClick={onStopGeneration}
+              style={{
+                padding: '10px 20px',
+                background: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontWeight: '500',
+                fontSize: '14px',
+                transition: 'background 0.2s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = '#c82333';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = '#dc3545';
+              }}
+            >
+              ⏹ Stop
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="send-button"
+              disabled={!input.trim() || isLoading}
+            >
+              Send
+            </button>
+          )}
         </div>
       </form>
     </div>

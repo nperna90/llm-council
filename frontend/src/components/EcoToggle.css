@@ -1,0 +1,89 @@
+.eco-toggle-container {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #f9fafb;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  margin-right: 8px;
+}
+
+.eco-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.eco-toggle-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+
+.eco-toggle-icon.enabled {
+  color: #10b981;
+}
+
+.eco-toggle-icon.disabled {
+  color: #9ca3af;
+}
+
+.eco-toggle-text {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.eco-toggle-text.enabled {
+  color: #1f2937;
+}
+
+.eco-toggle-text.disabled {
+  color: #6b7280;
+}
+
+.eco-toggle-switch {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 9999px;
+  transition: background-color 200ms ease-in-out;
+  cursor: pointer;
+  border: none;
+  outline: none;
+  padding: 0;
+}
+
+.eco-toggle-switch:focus {
+  outline: 2px solid #10b981;
+  outline-offset: 2px;
+}
+
+.eco-toggle-switch.enabled {
+  background-color: #10b981;
+}
+
+.eco-toggle-switch.disabled {
+  background-color: #d1d5db;
+}
+
+.eco-toggle-slider {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  background-color: white;
+  border-radius: 50%;
+  transition: transform 200ms ease-in-out;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.eco-toggle-slider.enabled {
+  transform: translateX(20px);
+}
+
+.eco-toggle-slider.disabled {
+  transform: translateX(0);
+}

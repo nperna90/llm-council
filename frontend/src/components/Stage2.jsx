@@ -21,6 +21,34 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
     return null;
   }
 
+  // Formatta i rankings per visualizzazione
+  const formatRankings = (rank) => {
+    // Nuovo formato: rank.rankings è un array di {target_agent_id, score, critique}
+    if (rank.rankings && Array.isArray(rank.rankings)) {
+      return rank.rankings.map(r => 
+        `**${r.target_agent_id}**: Voto ${r.score}/10 - ${r.critique}`
+      ).join('\n\n');
+    }
+    
+    // Formato legacy: rank.ranking è una stringa
+    if (rank.ranking) {
+      return rank.ranking;
+    }
+    
+    return 'Nessun ranking disponibile';
+  };
+
+  // Ottiene il nome del modello
+  const getModelName = (rank) => {
+    if (rank.model) {
+      return rank.model.split('/').pop() || rank.model;
+    }
+    if (rank.reviewer_name) {
+      return rank.reviewer_name;
+    }
+    return 'Unknown';
+  };
+
   return (
     <div className="stage stage2">
       <h3 className="stage-title">Stage 2: Peer Rankings</h3>
@@ -38,21 +66,22 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
             className={`tab ${activeTab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {rank.model.split('/')[1] || rank.model}
+            {getModelName(rank)}
           </button>
         ))}
       </div>
 
       <div className="tab-content">
         <div className="ranking-model">
-          {rankings[activeTab].model}
+          {getModelName(rankings[activeTab])}
         </div>
         <div className="ranking-content markdown-content">
           <ReactMarkdown>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
+            {deAnonymizeText(formatRankings(rankings[activeTab]), labelToModel)}
           </ReactMarkdown>
         </div>
 
+        {/* Parsed ranking per formato legacy */}
         {rankings[activeTab].parsed_ranking &&
          rankings[activeTab].parsed_ranking.length > 0 && (
           <div className="parsed-ranking">

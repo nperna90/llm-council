@@ -1,0 +1,48 @@
+---
+description: LLM Council project rules — architecture, code style, council flow, testing
+alwaysApply: true
+---
+
+# LLM Council — Project Rules
+
+## Architecture
+- Backend: Python 3.10+, FastAPI, async, SQLAlchemy (SQLite), OpenRouter API
+- Frontend: React 18, Vite, react-markdown
+- Backend runs on port 8001, frontend on 5173
+- Entry point: `backend/main.py` — run with `uv run python -m backend.main`
+
+## Code Style
+- All backend modules use async/await for I/O operations
+- All LLM calls go through `backend/openrouter.py:query_model()`
+- All database operations go through `backend/storage.py` (never import database.py directly in routes)
+- Use Pydantic models in `backend/schemas.py` for all structured data
+- All prompts live in `backend/prompts.py` — never hardcode prompts in other files
+- JSON responses from LLMs must be parsed with `backend/utils.py:extract_json()` (robust parser)
+- Type hints on all function signatures
+- Docstrings on all public functions
+
+## Financial Domain Rules
+- Tickers are extracted from user queries via `$TICKER` syntax (e.g., `$NVDA`)
+- Market data is fetched via yfinance in `backend/market_data.py`
+- Technical indicators are pre-computed numerically — LLMs interpret, they don't calculate
+- Risk Manager agent has veto power: if risk_score > 7, Chairman must downgrade recommendation
+- All price targets and levels must be numbers, not vague language
+- Always include invalidation conditions in trade plans
+
+## Council Flow
+- Stage 1: Specialist agents analyze independently (parallel async)
+- Stage 2: Anonymous peer review with multi-criteria scoring
+- Stage 3: Chairman synthesizes trade plan
+- Streaming uses SSE with stages: "stage1", "stage2", "stage3" (NOT "stage1_results")
+- After streaming, save to DB with `add_assistant_message(conversation_id, stage1, stage2, stage3)`
+
+## Testing
+- After any change to council.py, run: `uv run python -c "from backend.council import *; print('OK')"`
+- After any schema change, run: `uv run python -c "from backend.schemas import *; print('OK')"`
+- After any main.py change, start the server and test with curl
+
+## File Conventions
+- New backend modules go in `backend/` directory
+- New frontend components go in `frontend/src/components/`
+- Config values go in `backend/config.py`, never hardcoded
+- Environment variables in `.env`, loaded via python-dotenv

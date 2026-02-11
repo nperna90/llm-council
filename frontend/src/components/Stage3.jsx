@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import AgentRenderer from './AgentRenderer';
 import './Stage3.css';
 
 export default function Stage3({ finalResponse }) {
@@ -14,7 +15,7 @@ export default function Stage3({ finalResponse }) {
           Chairman: {finalResponse.model.split('/')[1] || finalResponse.model}
         </div>
         <div className="final-text markdown-content">
-          <ReactMarkdown>{finalResponse.response}</ReactMarkdown>
+          <AgentRenderer content={finalResponse.response} />
         </div>
       </div>
     </div>

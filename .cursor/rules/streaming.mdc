@@ -1,0 +1,19 @@
+---
+description: Streaming rules — SSE format and accumulation in main/council
+globs: backend/main.py, backend/council.py
+alwaysApply: false
+---
+
+# Streaming Rules
+
+## SSE Format
+- Events are `data: {json}\n\n`
+- Status events: `{ "type": "status", "stage": "stage1"|"stage2"|"stage3", "message": "..." }`
+- Data events: `{ "type": "data", "stage": "stage1"|"stage2", "content": [...] }`
+- Result events: `{ "type": "result", "content": "markdown string" }`
+- End: `data: [DONE]\n\n`
+
+## Accumulation in main.py
+- Match on `chunk["stage"] == "stage1"` (NOT "stage1_results")
+- Match on `chunk["stage"] == "stage2"` (NOT "stage2_results")
+- Always save after stream completes, even if stage1/stage2 are empty lists

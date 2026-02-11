@@ -50,8 +50,18 @@ def _parse_spreadsheet(content: bytes, filename: str) -> str:
             except:
                 # Fallback se pandas fallisce (es. separatori strani)
                 return content.decode('utf-8')
+        elif filename.endswith('.xlsx'):
+            # Excel moderno (.xlsx) - usa openpyxl
+            df = pd.read_excel(f, engine='openpyxl')
+        elif filename.endswith('.xls'):
+            # Excel vecchio formato (.xls) - usa xlrd se disponibile, altrimenti prova openpyxl
+            try:
+                df = pd.read_excel(f, engine='xlrd')
+            except:
+                # Fallback a openpyxl
+                df = pd.read_excel(f, engine='openpyxl')
         else:
-            # Excel
+            # Altri formati Excel
             df = pd.read_excel(f)
     
     # Convertiamo il dataframe in una stringa Markdown (perfetta per LLM)

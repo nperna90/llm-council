@@ -207,3 +207,57 @@ def update_conversation_title(conversation_id: str, title: str):
         raise
     finally:
         db.close()
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    db = SessionLocal()
+    try:
+        conv = db.query(ConversationDB).filter(ConversationDB.id == conversation_id).first()
+        if conv:
+            db.delete(conv)
+            db.commit()
+            return True
+        return False
+    except Exception as e:
+        print(f"Errore eliminazione conversazione: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def delete_conversations(conversation_ids: List[str]) -> int:
+    """
+    Delete multiple conversations.
+
+    Args:
+        conversation_ids: List of conversation identifiers
+
+    Returns:
+        Number of conversations deleted
+    """
+    db = SessionLocal()
+    try:
+        count = 0
+        for conv_id in conversation_ids:
+            conv = db.query(ConversationDB).filter(ConversationDB.id == conv_id).first()
+            if conv:
+                db.delete(conv)
+                count += 1
+        db.commit()
+        return count
+    except Exception as e:
+        print(f"Errore eliminazione conversazioni: {e}")
+        db.rollback()
+        raise
+    finally:
+        db.close()

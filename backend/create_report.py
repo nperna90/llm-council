@@ -42,17 +42,66 @@ class InvestmentMemoPDF(FPDF):
         self.set_font('Times', '', 11)
         self.set_text_color(20)
         # Sostituzioni caratteri Markdown semplici
-        clean_text = text.replace('**', '').replace('__', '').replace('`', '')
+        clean_text = text.replace('**', '').replace('__', '').replace('`', '').replace('*', '')
         
-        # Gestione encoding per evitare crash su caratteri speciali
+        # Il testo dovrebbe già essere pulito da clean_text_for_pdf, ma facciamo un controllo finale
+        # Rimuovi caratteri di controllo che potrebbero causare problemi
+        clean_text = ''.join(c for c in clean_text if c.isprintable() or c in ('\n', '\r', '\t'))
+        
+        # Verifica finale che sia in latin-1
         try:
-            clean_text = clean_text.encode('latin-1', 'replace').decode('latin-1')
-        except:
-            # Fallback: rimuovi caratteri non supportati
-            clean_text = ''.join(c for c in clean_text if ord(c) < 256)
+            clean_text.encode('latin-1')
+        except UnicodeEncodeError:
+            # Se ancora ci sono problemi, rimuovi caratteri problematici
+            clean_text = ''.join(c if ord(c) < 256 else '?' for c in clean_text)
         
-        self.multi_cell(0, 6, clean_text)
-        self.ln()
+        # Se il testo è vuoto dopo la pulizia, usa un placeholder
+        if not clean_text.strip():
+            clean_text = "[Contenuto non disponibile - caratteri non supportati]"
+        
+        try:
+            self.multi_cell(0, 6, clean_text)
+            self.ln()
+        except Exception as e:
+            # Se anche questo fallisce, prova con testo minimo
+            print(f"   ⚠️ Errore durante scrittura testo: {e}")
+            try:
+                self.multi_cell(0, 6, "[Errore nella formattazione del contenuto]")
+                self.ln()
+            except:
+                pass  # Se anche questo fallisce, continua
+
+
+def clean_text_for_pdf(text):
+    """
+    Pulisce il testo per renderlo compatibile con FPDF (latin-1 encoding).
+    Sostituisce caratteri Unicode non supportati con equivalenti ASCII.
+    """
+    if not text:
+        return ""
+    
+    # Mappa di sostituzione per caratteri comuni italiani/europei
+    replacements = {
+        'à': 'a', 'è': 'e', 'é': 'e', 'ì': 'i', 'ò': 'o', 'ù': 'u',
+        'À': 'A', 'È': 'E', 'É': 'E', 'Ì': 'I', 'Ò': 'O', 'Ù': 'U',
+        '€': 'EUR', '£': 'GBP', '¥': 'JPY', '°': 'deg',
+        '–': '-', '—': '-', '"': '"', ''': "'", ''': "'", '"': '"',
+        '…': '...', '•': '*', '→': '->', '←': '<-', '↑': '^', '↓': 'v',
+    }
+    
+    # Applica sostituzioni
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    
+    # Rimuovi tutti i caratteri non-ASCII rimanenti
+    try:
+        # Prova a codificare in latin-1
+        text = text.encode('latin-1', 'replace').decode('latin-1')
+    except:
+        # Fallback: rimuovi caratteri non supportati
+        text = ''.join(c if ord(c) < 256 and c.isprintable() else '?' for c in text)
+    
+    return text
 
 
 def generate_pdf(conversation_id, title, content):
@@ -60,17 +109,32 @@ def generate_pdf(conversation_id, title, content):
     Genera un PDF formattato basato sul contenuto della chat.
     Salva il file nella cartella 'reports'.
     """
+    # Pulisci il contenuto PRIMA di creare il PDF - CRITICO per FPDF
+    print(f"   Pulizia contenuto per compatibilità FPDF (latin-1)...")
+    original_length = len(content)
+    content = clean_text_for_pdf(content)
+    title = clean_text_for_pdf(title)
+    print(f"   Contenuto pulito: {len(content)} caratteri (originale: {original_length})")
+    
     pdf = InvestmentMemoPDF()
     pdf.add_page()
     pdf.set_auto_page_break(auto=True, margin=15)
     
     # Metadata del documento
     pdf.set_font('Arial', 'B', 12)
-    pdf.cell(0, 6, f"REF ID: {conversation_id[:8]}", 0, 1)
-    pdf.cell(0, 6, f"SUBJECT: {title}", 0, 1)
-    pdf.set_font('Arial', '', 10)
-    pdf.cell(0, 6, f"DATE: {datetime.now().strftime('%d %B %Y, %H:%M')}", 0, 1)
-    pdf.ln(10)
+    
+    # Pulisci il titolo per evitare problemi con caratteri speciali
+    safe_title_display = title[:100] if title else "Investment Analysis"
+    
+    try:
+        pdf.cell(0, 6, f"REF ID: {conversation_id[:8]}", 0, 1)
+        pdf.cell(0, 6, f"SUBJECT: {safe_title_display}", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        pdf.cell(0, 6, f"DATE: {datetime.now().strftime('%d %B %Y, %H:%M')}", 0, 1)
+        pdf.ln(10)
+    except Exception as e:
+        print(f"   ⚠️ Errore durante scrittura metadata: {e}")
+        # Continua comunque
 
     # Parsing del contenuto (simula la lettura dei capitoli Markdown)
     lines = content.split('\n')
@@ -84,6 +148,8 @@ def generate_pdf(conversation_id, title, content):
                 pdf.chapter_body(buffer)
                 buffer = ""
             clean_title = line.replace('#', '').strip()
+            # Pulisci anche il titolo
+            clean_title = clean_text_for_pdf(clean_title)
             pdf.chapter_title(clean_title)
         else:
             buffer += line + "\n"
@@ -95,13 +161,52 @@ def generate_pdf(conversation_id, title, content):
     # Nome file sicuro
     safe_title = "".join([c for c in title if c.isalnum() or c in (' ', '-', '_')]).strip()
     safe_title = safe_title.replace(" ", "_")
+    
+    # Se il titolo è vuoto o troppo corto, usa un default
+    if not safe_title or len(safe_title) < 3:
+        safe_title = "Investment_Analysis"
+    
+    # Crea il nome del file
     filename = REPORTS_DIR / f"Report_{safe_title}_{conversation_id[:8]}.pdf"
     
+    # Assicurati che la directory esista
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    
     try:
-        pdf.output(str(filename))
-        return str(filename)
+        print(f"   Salvataggio PDF in: {filename}")
+        print(f"   Directory reports: {REPORTS_DIR} (esiste: {REPORTS_DIR.exists()})")
+        
+        # Converti il path in stringa assoluta per evitare problemi
+        abs_filename = str(filename.absolute())
+        print(f"   Path assoluto: {abs_filename}")
+        
+        # Salva il PDF
+        pdf.output(abs_filename)
+        
+        # Verifica che il file sia stato creato
+        if not Path(abs_filename).exists():
+            print(f"   ❌ File non creato dopo output()")
+            print(f"   Verifica permessi di scrittura su: {REPORTS_DIR}")
+            return None
+        
+        file_size = Path(abs_filename).stat().st_size
+        if file_size == 0:
+            print(f"   ❌ File creato ma vuoto (0 bytes)")
+            return None
+            
+        print(f"   ✅ PDF salvato: {file_size} bytes")
+        return abs_filename
+    except PermissionError as e:
+        print(f"   ❌ Errore permessi durante salvataggio PDF: {e}")
+        print(f"   Verifica di avere i permessi di scrittura su: {REPORTS_DIR}")
+        import traceback
+        traceback.print_exc()
+        return None
     except Exception as e:
-        print(f"Errore PDF: {e}")
+        print(f"   ❌ Errore durante salvataggio PDF: {e}")
+        print(f"   Tipo errore: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
         return None
 
 

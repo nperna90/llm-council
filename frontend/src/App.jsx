@@ -15,6 +15,7 @@ function App() {
   const [activeTicker, setActiveTicker] = useState(null); // Il ticker mostrato a destra
   const [isPartyTime, setIsPartyTime] = useState(false);
   const [windowSize, setWindowSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [abortController, setAbortController] = useState(null);
 
   // Carica la watchlist all'avvio
   const loadWatchlist = async () => {
@@ -44,9 +45,8 @@ function App() {
 
   // Load conversation details when selected
   useEffect(() => {
-    if (currentConversationId) {
-      loadConversation(currentConversationId);
-    }
+    if (!currentConversationId) return;
+    loadConversation(currentConversationId);
   }, [currentConversationId]);
 
   // Aggiorna dimensioni finestra per i coriandoli
@@ -135,17 +135,62 @@ function App() {
     setCurrentConversationId(id);
   };
 
-  const handleSendMessage = async (content, tutorMode = false) => {
-    if (!currentConversationId) return;
+  const handleSendMessage = async (content, tutorMode = false, ecoMode = false) => {
+    console.log('🔄 handleSendMessage chiamato con:', { content, tutorMode, ecoMode, currentConversationId });
+    
+    // Se non c'è una conversazione attiva, creane una nuova automaticamente
+    let conversationId = currentConversationId;
+    if (!conversationId) {
+      try {
+        console.log('📝 Nessuna conversazione attiva, creazione automatica...');
+        const newConv = await api.createConversation();
+        console.log('✅ Conversazione creata:', newConv);
+        conversationId = newConv.id;
+        setConversations([
+          { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
+          ...conversations,
+        ]);
+        setCurrentConversationId(newConv.id);
+        // Carica la conversazione appena creata
+        await loadConversation(newConv.id);
+        console.log('✅ Conversazione caricata');
+      } catch (error) {
+        console.error('❌ Errore creazione conversazione:', error);
+        alert('Impossibile creare una nuova conversazione. Riprova. Errore: ' + error.message);
+        return;
+      }
+    }
+    
+    console.log('📤 Invio messaggio alla conversazione:', conversationId);
 
     setIsLoading(true);
+    
+    // Create AbortController for this request
+    const controller = new AbortController();
+    setAbortController(controller);
+    
     try {
+      // Assicurati che la conversazione sia caricata
+      if (!currentConversation || currentConversation.id !== conversationId) {
+        await loadConversation(conversationId);
+      }
+      
       // Optimistically add user message to UI
       const userMessage = { role: 'user', content };
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage],
-      }));
+      setCurrentConversation((prev) => {
+        if (!prev || prev.id !== conversationId) {
+          return {
+            id: conversationId,
+            title: 'New Conversation',
+            messages: [userMessage],
+            created_at: new Date().toISOString()
+          };
+        }
+        return {
+          ...prev,
+          messages: [...(prev.messages || []), userMessage],
+        };
+      });
 
       // Create a partial assistant message that will be updated progressively
       const assistantMessage = {
@@ -162,102 +207,154 @@ function App() {
       };
 
       // Add the partial assistant message
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: [...prev.messages, assistantMessage],
-      }));
+      setCurrentConversation((prev) => {
+        if (!prev || prev.id !== conversationId) {
+          return {
+            id: conversationId,
+            title: 'New Conversation',
+            messages: [{ role: 'user', content }, assistantMessage],
+            created_at: new Date().toISOString()
+          };
+        }
+        return {
+          ...prev,
+          messages: [...(prev.messages || []), assistantMessage],
+        };
+      });
 
       // Send message with streaming
-      await api.sendMessageStream(currentConversationId, content, (eventType, event) => {
-        switch (eventType) {
-          case 'stage1_start':
+      console.log('🚀 Invio stream alla conversazione:', conversationId);
+      await api.sendMessageStream(conversationId, content, (event) => {
+        console.log('📨 Evento ricevuto:', event);
+        
+        // Gestisce i nuovi eventi dal backend streaming
+        if (event.type === 'status') {
+          // Aggiornamenti di stato (market_data, stage1, stage2, stage3)
+          const stage = event.stage;
+          if (stage === 'stage1') {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage1 = true;
+              if (lastMsg) lastMsg.loading.stage1 = true;
               return { ...prev, messages };
             });
-            break;
-
-          case 'stage1_complete':
+          } else if (stage === 'stage2') {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.stage1 = event.data;
-              lastMsg.loading.stage1 = false;
+              if (lastMsg) {
+                lastMsg.loading.stage1 = false;
+                lastMsg.loading.stage2 = true;
+              }
               return { ...prev, messages };
             });
-            break;
-
-          case 'stage2_start':
+          } else if (stage === 'stage3') {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage2 = true;
+              if (lastMsg) {
+                lastMsg.loading.stage2 = false;
+                lastMsg.loading.stage3 = true;
+              }
               return { ...prev, messages };
             });
-            break;
-
-          case 'stage2_complete':
+          }
+        } else if (event.type === 'data') {
+          // 🟢 FIX: Salva i dati strutturati nel messaggio
+          if (event.stage === 'stage1') {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.stage2 = event.data;
-              lastMsg.metadata = event.metadata;
-              lastMsg.loading.stage2 = false;
+              if (lastMsg) {
+                lastMsg.stage1 = event.content; // Salva le opinioni
+                lastMsg.loading.stage1 = false;
+              }
               return { ...prev, messages };
             });
-            break;
-
-          case 'stage3_start':
+          } else if (event.stage === 'stage2') {
             setCurrentConversation((prev) => {
               const messages = [...prev.messages];
               const lastMsg = messages[messages.length - 1];
-              lastMsg.loading.stage3 = true;
+              if (lastMsg) {
+                lastMsg.stage2 = event.content; // Salva i voti
+                lastMsg.loading.stage2 = false;
+              }
               return { ...prev, messages };
             });
-            break;
-
-          case 'stage3_complete':
-            setCurrentConversation((prev) => {
-              const messages = [...prev.messages];
-              const lastMsg = messages[messages.length - 1];
-              lastMsg.stage3 = event.data;
+          }
+        } else if (event.type === 'result') {
+          // Risultato finale (stage3)
+          setCurrentConversation((prev) => {
+            const messages = [...prev.messages];
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg) {
+              lastMsg.stage3 = {
+                model: 'Chairman',
+                response: event.content
+              };
               lastMsg.loading.stage3 = false;
-              return { ...prev, messages };
-            });
-            break;
-
-          case 'title_complete':
-            // Reload conversations to get updated title
-            loadConversations();
-            break;
-
-          case 'complete':
-            // Stream complete, reload conversations list
-            loadConversations();
-            setIsLoading(false);
-            break;
-
-          case 'error':
-            console.error('Stream error:', event.message);
-            setIsLoading(false);
-            break;
-
-          default:
-            console.log('Unknown event type:', eventType);
+            }
+            return { ...prev, messages };
+          });
+          
+          // Stream completo, reload conversations
+          loadConversations();
+          setIsLoading(false);
+          setAbortController(null);
+        } else if (event.type === 'cancelled') {
+          console.log('🛑 Stream cancellato');
+          setIsLoading(false);
+          setAbortController(null);
+          // Rimuovi il messaggio assistant parziale se presente
+          setCurrentConversation((prev) => {
+            if (!prev) return prev;
+            const messages = [...prev.messages];
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg && lastMsg.role === 'assistant' && 
+                (!lastMsg.stage1 || !lastMsg.stage2 || !lastMsg.stage3)) {
+              return {
+                ...prev,
+                messages: messages.slice(0, -1),
+              };
+            }
+            return prev;
+          });
+        } else if (event.type === 'error') {
+          console.error('❌ Stream error:', event.message);
+          alert('Errore durante lo streaming: ' + (event.message || 'Errore sconosciuto'));
+          setIsLoading(false);
+          setAbortController(null);
         }
-      }, tutorMode);
+      }, tutorMode, ecoMode, controller.signal);
     } catch (error) {
-      console.error('Failed to send message:', error);
-      // Remove optimistic messages on error
-      setCurrentConversation((prev) => ({
-        ...prev,
-        messages: prev.messages.slice(0, -2),
-      }));
+      if (error.name === 'AbortError') {
+        console.log('🛑 Richiesta interrotta dall\'utente');
+        // Non mostrare alert per interruzioni volontarie
+      } else {
+        console.error('❌ Errore invio messaggio:', error);
+        alert('Errore durante l\'invio del messaggio: ' + error.message);
+        // Remove optimistic messages on error
+        setCurrentConversation((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.slice(0, -2),
+          };
+        });
+      }
       setIsLoading(false);
+      setAbortController(null);
     }
   };
+
+  const handleStopGeneration = () => {
+    if (abortController) {
+      abortController.abort();
+      console.log('🛑 Interruzione richiesta dall\'utente');
+    }
+  };
+
+
 
   return (
     <div className="app">
@@ -296,6 +393,7 @@ function App() {
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onConversationDeleted={loadConversations}
       />
       <div className="app-main-content">
         
@@ -305,6 +403,7 @@ function App() {
             conversation={currentConversation}
             onSendMessage={handleSendMessage}
             isLoading={isLoading}
+            onStopGeneration={handleStopGeneration}
             // Passiamo una funzione alla chat per cambiare il grafico
             onTickerClick={(ticker) => setActiveTicker(ticker)}
             // Passiamo la funzione per controllare i moonshot

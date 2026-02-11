@@ -1,25 +1,68 @@
 .stage3 {
-  background: #f0fff0;
-  border-color: #c8e6c8;
+  background: #f9fafb;
+  border-color: #e5e7eb;
 }
 
 .final-response {
   background: #ffffff;
   padding: 20px;
-  border-radius: 6px;
-  border: 1px solid #c8e6c8;
+  border-radius: 8px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
 .chairman-label {
-  color: #2d8a2d;
+  color: var(--color-chairman, #d4af37);
   font-size: 12px;
   font-family: monospace;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
   font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .final-text {
-  color: #333;
+  color: #000000 !important;
   line-height: 1.7;
   font-size: 15px;
+}
+
+.final-text .markdown-content {
+  color: #000000 !important;
+}
+
+.final-text .markdown-content p {
+  color: #000000 !important;
+}
+
+.final-text .markdown-content h1,
+.final-text .markdown-content h2,
+.final-text .markdown-content h3,
+.final-text .markdown-content h4,
+.final-text .markdown-content h5,
+.final-text .markdown-content h6 {
+  color: #000000 !important;
+}
+
+.final-text .markdown-content li {
+  color: #000000 !important;
+}
+
+.final-text .markdown-content strong {
+  color: #000000 !important;
+}
+
+/* Assicura che il contenuto degli agenti sia nero per il Chairman */
+.agent-card.agent-chairman .agent-content {
+  color: #000000 !important;
+}
+
+.agent-card.agent-chairman .agent-content p {
+  color: #000000 !important;
+}
+
+.agent-card.agent-chairman .agent-content h1,
+.agent-card.agent-chairman .agent-content h2,
+.agent-card.agent-chairman .agent-content h3 {
+  color: #000000 !important;
 }

@@ -13,3 +13,43 @@
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
 }
+
+/* Layout split view per chat e pannello destro */
+.app-main-content {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+  background: #000000;
+  color: #f3f4f6;
+}
+
+.app-chat-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  z-index: 0;
+}
+
+.app-right-panel {
+  width: 400px;
+  height: 100%;
+  box-shadow: -4px 0 6px -1px rgba(0, 0, 0, 0.1), -2px 0 4px -1px rgba(0, 0, 0, 0.06);
+  z-index: 10;
+}
+
+/* Su schermi grandi, aumenta la larghezza del pannello */
+@media (min-width: 1280px) {
+  .app-right-panel {
+    width: 450px;
+  }
+}
+
+/* Su schermi piccoli, nascondi il pannello destro */
+@media (max-width: 1024px) {
+  .app-right-panel {
+    display: none !important;
+  }
+}

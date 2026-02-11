@@ -1,0 +1,25 @@
+---
+description: Financial analysis rules — data pipeline, agent output schema, prompt design
+globs: backend/**
+alwaysApply: false
+---
+
+# Financial Analysis Rules
+
+## Data Pipeline
+- Pre-compute all numerical metrics (RSI, MACD, SMA, etc.) in Python before sending to LLMs
+- LLMs receive pre-computed data strings — they INTERPRET numbers, they do NOT calculate
+- Always include: current price, 52-week range, key moving averages, RSI, volume profile
+- Always include macro context (VIX level, SPY trend, rate environment)
+- Cache market data for 1 hour via cache_manager
+
+## Agent Output Schema
+- Every agent returns JSON with: thesis, direction, conviction, timeframe, confidence, risk_score
+- Specialist agents include their domain-specific sub-object (technical, fundamental, risk, macro, sentiment)
+- Chairman returns a TradePlan with entry/stop/targets/position_size/invalidation
+
+## Prompt Design
+- All prompts include JSON_INSTRUCTION enforcing pure JSON output
+- All prompts include SYSTEM_PREAMBLE with ticker, date, and rules
+- Prompts distinguish FACTS (from data) vs INFERENCE (agent reasoning)
+- Prompts require agents to state assumptions and what could go wrong
