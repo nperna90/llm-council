@@ -14,14 +14,45 @@ import numpy as np
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
 from .cache_manager import cached_data
+from . import analytics
+from . import backtester
+from . import fundamentals
+from . import correlation
+from . import technicals
 from .search_tool import get_latest_news
-from .analytics import get_performance_metrics, check_leverage_decay
-from .fundamentals import get_fundamental_ratios
-from .correlation import get_portfolio_correlation
-from .backtester import run_quick_backtest
 
 
-def get_market_data(ticker: str, period: str = "1y") -> Dict[str, Any]:
+@cached_data(ttl_seconds=3600)
+def get_market_data(tickers: list, period="5y") -> pd.DataFrame:
+    """
+    Scarica i dati PREZZO per TUTTI i ticker in una sola chiamata.
+    """
+    if not tickers:
+        return pd.DataFrame()
+
+    # Aggiungi SPY per benchmark
+    download_list = list(set(tickers + ['SPY']))
+    
+    try:
+        # Scarica tutto insieme (Molto più veloce)
+        # auto_adjust=False ci garantisce di avere 'Adj Close' e 'Close' separati
+        df = yf.download(download_list, period=period, progress=False, auto_adjust=False)
+        
+        # Gestione sicura del prezzo (Adj Close preferito per i rendimenti)
+        if 'Adj Close' in df:
+            data = df['Adj Close']
+        elif 'Close' in df:
+            data = df['Close']
+        else:
+            return pd.DataFrame()
+            
+        return data
+    except Exception as e:
+        print(f"⚠️ Data Download Error: {e}")
+        return pd.DataFrame()
+
+
+def get_market_data_single(ticker: str, period: str = "1y") -> Dict[str, Any]:
     """
     Fetch comprehensive market data for a ticker including:
     - Price history
@@ -150,7 +181,7 @@ def get_multiple_tickers(tickers: List[str], period: str = "1y") -> Dict[str, Di
     """
     results = {}
     for ticker in tickers:
-        results[ticker] = get_market_data(ticker, period)
+        results[ticker] = get_market_data_single(ticker, period)
     return results
 
 
@@ -372,140 +403,125 @@ def calculate_rsi(prices: pd.Series, period: int = 14) -> Optional[float]:
         return None
 
 
-@cached_data(ttl_seconds=300)
-def get_llm_context_string(tickers: List[str]) -> str:
+def get_llm_context_string(tickers: list) -> str:
     """
-    Funzione Helper che recupera tutto (Dati + News + Analisi Tecnica) e restituisce
-    una SINGOLA STRINGA formattata pronta per il prompt dell'AI.
-    Ora con CACHE: i dati durano 5 minuti.
+    Orchestra tutto il recupero dati e formatta la stringa per l'LLM.
+    Usa il download centralizzato per evitare doppie chiamate.
     """
     if not tickers:
-        return "Nessun ticker specificato."
+        return "Nessun ticker rilevato."
 
-    print(f"📥 Scarico dati per contesto: {tickers}")
+    # 1. Scarica Prezzi (Batch - Veloce)
+    price_data = get_market_data(tickers)
     
-    data_map = get_multiple_tickers(tickers)
+    if price_data.empty:
+        return "Errore: Impossibile scaricare i dati di mercato."
     
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
-    report = f"--- REAL-TIME MARKET SNAPSHOT ({timestamp}) ---\n"
-    report += "NOTA: Usa questi dati come unica fonte di verità. I prezzi sono aggiornati.\n\n"
-
-    # Sezioni separate per organizzare meglio i dati
-    section_quant = "--- DATI QUANTITATIVI, TECNICI E FONDAMENTALI (v2.0) ---\n"
-    section_macro = "--- ULTIME NEWS DAL WEB (LIVE) ---\n"
-
-    # --- 1. DATI PORTAFOGLIO (Correlazione + Backtest) ---
-    print(f"⏳ Eseguo calcoli complessi per {tickers}...")
+    context_parts = []
     
-    correlation_report = get_portfolio_correlation(tickers)
+    # 2. Analisi Quantitativa (Prezzi)
+    context_parts.append("--- DATI DI MERCATO (Snapshot) ---")
     
-    # NOVITÀ: Chiamata al Backtest
-    # Passiamo 'SPY' come benchmark standard
-    backtest_report = run_quick_backtest(tickers, benchmark='SPY', period='5y')
-    
-    # Costruiamo la sezione Quant
-    if correlation_report or backtest_report:
-        section_quant += f"{correlation_report}\n"
-        section_quant += f"{backtest_report}\n\n"
-        section_quant += "-"*40 + "\n"
-
-    for ticker, data in data_map.items():
-        if "error" in data:
-            section_quant += f"❌ {ticker}: Errore download ({data['error']})\n"
-            continue
-
-        info = data.get("info", {})
-        fund = data.get("fundamentals", {})
-        news = data.get("news", [])
-        price_data = data.get("price_data", pd.DataFrame())
-        
-        # Dati Essenziali
-        price = data.get("current_price", "N/A")
-        if isinstance(price, float): price = f"${price:.2f}"
-        
-        # ANALISI TECNICA: Calcolo RSI
-        technical_msg = ""
-        try:
-            if not price_data.empty and 'Close' in price_data.columns:
-                # Prendiamo almeno 6 mesi di storia per calcolare RSI
-                hist = price_data.tail(180)  # ~6 mesi di dati giornalieri
-                
-                if len(hist) >= 15:  # Serve almeno 15 giorni per RSI(14)
-                    rsi = calculate_rsi(hist['Close'], period=14)
-                    
-                    if rsi is not None:
-                        rsi_status = "Neutrale"
-                        if rsi > 70:
-                            rsi_status = "IPERCOMPRATO (Rischio storno)"
-                        elif rsi < 30:
-                            rsi_status = "IPERVENDUTO (Possibile rimbalzo)"
-                        
-                        technical_msg = f" | RSI(14): {rsi:.1f} [{rsi_status}]"
-        except Exception as e:
-            print(f"Errore Tech Analysis su {ticker}: {e}")
-            # Continua senza RSI se c'è un errore
-        
-        # --- ANALYTICS v2.0 ---
-        perf = get_performance_metrics(ticker)
-        perf_str = ""
-        technical_levels = ""
-        
-        if perf:
-            # Logica SMA per l'LLM
-            sma_note = ""
-            if perf['dist_sma_200'] is not None:
-                trend = "Rialzista" if perf['dist_sma_200'] > 0 else "Ribassista"
-                sma_note = f" | Trend 200gg: {trend} ({perf['dist_sma_200']}% vs SMA200)"
-            else:
-                sma_note = " | Dati storici insufficienti per trend lungo"
-
-            risk_icon = "🟢"
-            if perf['max_drawdown'] < -30: risk_icon = "🟠"
-            if perf['max_drawdown'] < -50: risk_icon = "🔴"
-            
-            # Check Volatility Drag per asset a leva
-            leverage_warning = check_leverage_decay(ticker, perf['volatility'])
-            
-            perf_str = (
-                f"\n   └─ ⏳ HISTORY & TREND:\n"
-                f"      • 1Y Perf: {perf['return_1y']}% | Drawdown: {perf['max_drawdown']}% {risk_icon}\n"
-                f"      • Volatilità: {perf['volatility']}%\n"
-                f"      • Livelli Chiave: SMA50 ${perf['sma_50']} | SMA200 ${perf['sma_200']}{sma_note}"
+    for ticker in tickers:
+        # Analytics (SMA, Volatilità) - Usa i dati scaricati
+        metrics = analytics.get_performance_metrics(ticker, price_data)
+        if metrics:
+            metrics_str = (
+                f"📌 {ticker}: ${metrics['price']} | "
+                f"1Y: {metrics['return_1y']}% | "
+                f"Vol: {metrics['volatility']}% | "
+                f"MaxDD: {metrics['max_drawdown']}% | "
+                f"SMA200: ${metrics['sma_200']} (Dist: {metrics['dist_sma_200']}%)"
             )
             
-            # Aggiungi warning Volatility Drag se presente
-            if leverage_warning:
-                perf_str += f"\n      {leverage_warning}"
-        
-        # --- NUOVO: WARREN BUFFETT MODE ---
-        fundamentals_str = get_fundamental_ratios(ticker)
-        
-        # Costruzione blocco dati quantitativi
-        section_quant += f"📊 {ticker} ({info.get('shortName', ticker)})\n"
-        section_quant += f"   • Prezzo: {price} | P/E: {fund.get('pe_ratio', 'N/A')} | Beta: {fund.get('beta', 'N/A')}{technical_msg}{perf_str}{fundamentals_str}\n"
-        
-        # Aggiunta News da Yahoo Finance (esistenti)
-        if news:
-            section_quant += "   • 📰 NEWS RECENTI (Yahoo Finance):\n"
-            # Prendiamo solo le prime 2 news per non intasare il prompt
-            for n in news[:2]:
-                title = n.get('title', 'Nessun titolo')
-                publisher = n.get('publisher', 'Fonte sconosciuta')
-                section_quant += f"     - [{publisher}] {title}\n"
-        
-        section_quant += "\n"
-        
-        # --- NUOVO: WEB SEARCH ---
-        # Cerchiamo "Ticker Stock News" o "Ticker Financial News"
-        try:
-            news_text = get_latest_news(f"{ticker} stock news financial", max_results=2)
-            section_macro += f"📰 NEWS SU {ticker}:\n{news_text}\n\n"
-        except Exception as e:
-            print(f"Errore ricerca web news per {ticker}: {e}")
-            section_macro += f"📰 NEWS SU {ticker}: Errore nel recupero news web.\n\n"
+            # Check Volatility Drag
+            decay_msg = analytics.check_leverage_decay(ticker, metrics['volatility'])
+            if decay_msg:
+                metrics_str += f"\n      {decay_msg}"
+                
+            context_parts.append(metrics_str)
+            
+            # Technical Indicators (OHLCV-based — fetches H/L/V separately)
+            try:
+                ohlcv = technicals.get_ohlcv_data(ticker)
+                if not ohlcv.empty:
+                    tech_indicators = technicals.compute_technical_indicators(ticker, ohlcv)
+                    if tech_indicators:
+                        tech_str = technicals.format_technicals_for_llm(tech_indicators)
+                        if tech_str:
+                            context_parts.append(tech_str)
+            except Exception as e:
+                print(f"[WARN] Errore calcolo technicals per {ticker}: {e}")
+            
+            # Fundamentals (Richiede chiamata singola per ora, ma è cachata)
+            fund_str = fundamentals.get_fundamental_ratios(ticker)
+            if fund_str:
+                context_parts.append(fund_str)
+            
+            # --- INTEGRAZIONE NEWS ---
+            print(f"[NEWS] Scaricamento news per {ticker}...")
+            try:
+                news_context = get_latest_news(ticker, max_results=5)
+                if news_context and "Nessuna news" not in news_context and "Errore" not in news_context:
+                    context_parts.append(f"\n--- ULTIME NEWS {ticker} ---\n{news_context}")
+            except Exception as e:
+                print(f"[WARN] Errore recupero news per {ticker}: {e}")
+                # Continua senza news se c'è un errore
+        else:
+            context_parts.append(f"📌 {ticker}: Dati insufficienti.")
 
-    report += section_quant
-    report += "\n"
-    report += section_macro
-    report += "\n--- END OF SNAPSHOT ---"
-    return report
+    # 3. Correlazione (Usa i dati scaricati - Veloce)
+    corr_report = correlation.get_portfolio_correlation(tickers, price_data)
+    if corr_report:
+        context_parts.append(corr_report)
+
+    # 4. Backtest (Usa i dati scaricati - Veloce)
+    backtest_report = backtester.run_quick_backtest(tickers, price_data)
+    if backtest_report:
+        context_parts.append(backtest_report)
+
+    return "\n".join(context_parts)
+
+
+def extract_tickers(text: str) -> list:
+    """
+    Estrae i ticker dal testo.
+    Modalità "Solo Dollaro": accetta SOLO i ticker espliciti con il prefisso $ (es. $NVDA).
+    """
+    import re
+    # Cerca SOLO i pattern con il dollaro esplicito (es. $NVDA, $TSLA)
+    explicit_tickers = re.findall(r'\$([A-Z]{1,5})', text.upper())
+    # Rimuoviamo duplicati e restituiamo la lista pulita
+    return list(set(explicit_tickers))
+
+
+def get_market_history(ticker: str) -> List[Dict[str, Any]]:
+    """
+    Restituisce lo storico dei prezzi di un ticker per visualizzazione grafico.
+    Formattato per Recharts (Array di oggetti con date, price, volume).
+    """
+    try:
+        import yfinance as yf
+        # Scarica 1 anno di dati
+        ticker_obj = yf.Ticker(ticker)
+        hist = ticker_obj.history(period="1y")
+        
+        if hist.empty:
+            return []
+        
+        # Formatta per Recharts (Array di oggetti)
+        data = []
+        for date, row in hist.iterrows():
+            data.append({
+                "date": date.strftime('%Y-%m-%d'),
+                "price": float(row['Close']),
+                "volume": int(row['Volume']) if 'Volume' in row else 0
+            })
+        
+        # Ordina per data (più vecchio -> più recente)
+        data.sort(key=lambda x: x['date'])
+        
+        return data
+    except Exception as e:
+        print(f"Errore recupero storico {ticker}: {e}")
+        return []
